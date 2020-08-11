@@ -29,16 +29,11 @@ func mergeLabels(labels ...map[string]string) map[string]string {
 }
 
 // buildLabels returns generic labels based on the name given for a Dynatrace OneAgent
-func buildLabels(name string) map[string]string {
+func BuildLabels(name string) map[string]string {
 	return map[string]string{
 		"dynatrace": "oneagent",
 		"oneagent":  name,
 	}
-}
-
-// isPredefinedLabel returns true if the label is predefined by the Operator.
-func isPredefinedLabel(label string) bool {
-	return label == "dynatrace" || label == "oneagent"
 }
 
 // getPodReadyState determines the overall ready state of a Pod.
@@ -56,7 +51,7 @@ func getPodReadyState(p *corev1.Pod) bool {
 //
 // Return an error in the following conditions
 // - APIURL empty
-func validate(cr dynatracev1alpha1.BaseOneAgentDaemonSet) error {
+func Validate(cr dynatracev1alpha1.BaseOneAgentDaemonSet) error {
 	var msg []string
 	if cr.GetOneAgentSpec().APIURL == "" {
 		msg = append(msg, ".spec.apiUrl is missing")
@@ -67,11 +62,11 @@ func validate(cr dynatracev1alpha1.BaseOneAgentDaemonSet) error {
 	return nil
 }
 
-func hasDaemonSetChanged(a, b *appsv1.DaemonSet) bool {
+func HasDaemonSetChanged(a, b *appsv1.DaemonSet) bool {
 	return getTemplateHash(a) != getTemplateHash(b)
 }
 
-func generateDaemonSetHash(ds *appsv1.DaemonSet) (string, error) {
+func GenerateDaemonSetHash(ds *appsv1.DaemonSet) (string, error) {
 	data, err := json.Marshal(ds)
 	if err != nil {
 		return "", err

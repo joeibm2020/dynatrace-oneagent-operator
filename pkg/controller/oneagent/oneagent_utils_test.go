@@ -15,7 +15,7 @@ import (
 )
 
 func TestBuildLabels(t *testing.T) {
-	l := buildLabels("my-name")
+	l := BuildLabels("my-name")
 	assert.Equal(t, l["dynatrace"], "oneagent")
 	assert.Equal(t, l["oneagent"], "my-name")
 }
@@ -42,9 +42,9 @@ func TestGetPodReadyState(t *testing.T) {
 
 func TestOneAgent_Validate(t *testing.T) {
 	oa := newOneAgent()
-	assert.Error(t, validate(oa))
+	assert.Error(t, Validate(oa))
 	oa.Spec.APIURL = "https://f.q.d.n/api"
-	assert.NoError(t, validate(oa))
+	assert.NoError(t, Validate(oa))
 }
 
 func TestMigrationForDaemonSetWithoutAnnotation(t *testing.T) {
@@ -52,11 +52,11 @@ func TestMigrationForDaemonSetWithoutAnnotation(t *testing.T) {
 
 	ds1 := &appsv1.DaemonSet{ObjectMeta: oaKey}
 
-	ds2, err := newDaemonSetForCR(&dynatracev1alpha1.OneAgent{ObjectMeta: oaKey})
+	ds2, err := NewDaemonSetForCR(&dynatracev1alpha1.OneAgent{ObjectMeta: oaKey})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, ds2.Annotations[annotationTemplateHash])
 
-	assert.True(t, hasDaemonSetChanged(ds1, ds2))
+	assert.True(t, HasDaemonSetChanged(ds1, ds2))
 }
 
 func TestHasSpecChanged(t *testing.T) {
@@ -68,16 +68,16 @@ func TestHasSpecChanged(t *testing.T) {
 
 			mod(&old, &new)
 
-			ds1, err := newDaemonSetForCR(&old)
+			ds1, err := NewDaemonSetForCR(&old)
 			assert.NoError(t, err)
 
-			ds2, err := newDaemonSetForCR(&new)
+			ds2, err := NewDaemonSetForCR(&new)
 			assert.NoError(t, err)
 
 			assert.NotEmpty(t, ds1.Annotations[annotationTemplateHash])
 			assert.NotEmpty(t, ds2.Annotations[annotationTemplateHash])
 
-			assert.Equal(t, exp, hasDaemonSetChanged(ds1, ds2))
+			assert.Equal(t, exp, HasDaemonSetChanged(ds1, ds2))
 		})
 	}
 
