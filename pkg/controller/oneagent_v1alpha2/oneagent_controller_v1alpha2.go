@@ -1,21 +1,21 @@
-package oneagent
+package oneagent_v1alpha2
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagent"
 	"net/http"
-	"reflect"
 	"time"
 
 	dynatracev1alpha1 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha1"
+	dynatracev1alpha2 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha2"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/istio"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/utils"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/dtclient"
 	"github.com/go-logr/logr"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -59,7 +59,7 @@ func Add(mgr manager.Manager) error {
 		mgr.GetConfig(),
 		log.Log.WithName("oneagent.controller"),
 		utils.BuildDynatraceClient,
-		&dynatracev1alpha1.OneAgent{}))
+		&dynatracev1alpha2.OneAgent{}))
 }
 
 // NewOneAgentReconciler initialises a new ReconcileOneAgent instance
@@ -91,7 +91,7 @@ func add(mgr manager.Manager, r *ReconcileOneAgent) error {
 	}
 
 	// Watch for changes to primary resource OneAgent
-	err = c.Watch(&source.Kind{Type: &dynatracev1alpha1.OneAgent{}}, &handler.EnqueueRequestForObject{})
+	err = c.Watch(&source.Kind{Type: &dynatracev1alpha2.OneAgent{}}, &handler.EnqueueRequestForObject{})
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func add(mgr manager.Manager, r *ReconcileOneAgent) error {
 	// Watch for changes to secondary resource DaemonSets and requeue the owner OneAgent
 	err = c.Watch(&source.Kind{Type: &appsv1.DaemonSet{}}, &handler.EnqueueRequestForOwner{
 		IsController: true,
-		OwnerType:    &dynatracev1alpha1.OneAgent{},
+		OwnerType:    &dynatracev1alpha2.OneAgent{},
 	})
 	if err != nil {
 		return err
@@ -150,7 +150,7 @@ func (r *ReconcileOneAgent) Reconcile(request reconcile.Request) (reconcile.Resu
 
 	if rec.err != nil {
 		if rec.update || instance.GetOneAgentStatus().SetPhaseOnError(rec.err) {
-			if errClient := UpdateCR(instance, r.client); errClient != nil {
+			if errClient := oneagent.UpdateCR(instance, r.client); errClient != nil {
 				return reconcile.Result{}, fmt.Errorf("failed to update CR after failure, original, %s, then: %w", rec.err, errClient)
 			}
 		}
@@ -165,7 +165,7 @@ func (r *ReconcileOneAgent) Reconcile(request reconcile.Request) (reconcile.Resu
 	}
 
 	if rec.update {
-		if err := UpdateCR(instance, r.client); err != nil {
+		if err := oneagent.UpdateCR(instance, r.client); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
@@ -189,7 +189,7 @@ type reconciliation struct {
 }
 
 func (r *ReconcileOneAgent) reconcileImpl(rec *reconciliation) {
-	if err := Validate(rec.instance); rec.Error(err) {
+	if err := oneagent.Validate(rec.instance); rec.Error(err) {
 		return
 	}
 
@@ -226,7 +226,7 @@ func (r *ReconcileOneAgent) reconcileImpl(rec *reconciliation) {
 	}
 
 	// Finally we have to determine the correct non error phase
-	if upd, err = DetermineOneAgentPhase(rec.instance, r.client); !rec.Error(err) {
+	if upd, err = oneagent.DetermineOneAgentPhase(rec.instance, r.client); !rec.Error(err) {
 		rec.Update(upd, 5*time.Minute, "Phase change")
 	}
 }
@@ -235,7 +235,7 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 	updateCR := false
 
 	// Define a new DaemonSet object
-	dsDesired, err := NewDaemonSetForCR(instance)
+	dsDesired, err := oneagent.NewDaemonSetForCR(instance)
 	if err != nil {
 		return false, err
 	}
@@ -255,7 +255,7 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 		}
 	} else if err != nil {
 		return false, err
-	} else if HasDaemonSetChanged(dsDesired, dsActual) {
+	} else if oneagent.HasDaemonSetChanged(dsDesired, dsActual) {
 		logger.Info("Updating existing daemonset")
 		if err = r.client.Update(context.TODO(), dsDesired); err != nil {
 			return false, err
@@ -279,63 +279,63 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 
 func (r *ReconcileOneAgent) reconcileVersion(logger logr.Logger, instance dynatracev1alpha1.BaseOneAgentDaemonSet, dtc dtclient.Client) (bool, error) {
 	updateCR := false
-
-	// get desired version
-	desired, err := dtc.GetLatestAgentVersion(dtclient.OsUnix, dtclient.InstallerTypeDefault)
-	if err != nil {
-		return false, fmt.Errorf("failed to get desired version: %w", err)
-	} else if desired != "" && instance.GetOneAgentStatus().Version != desired {
-		logger.Info("new version available", "actual", instance.GetOneAgentStatus().Version, "desired", desired)
-		instance.GetOneAgentStatus().Version = desired
-		updateCR = true
-	}
-
-	// query oneagent pods
-	podList := &corev1.PodList{}
-	listOps := []client.ListOption{
-		client.InNamespace(instance.GetNamespace()),
-		client.MatchingLabels(BuildLabels(instance.GetName())),
-	}
-	err = r.client.List(context.TODO(), podList, listOps...)
-	if err != nil {
-		logger.Error(err, "failed to list pods", "listops", listOps)
-		return updateCR, err
-	}
-
-	// determine pods to restart
-	podsToDelete, instances, err := getPodsToRestart(podList.Items, dtc, instance)
-	if err != nil {
-		return updateCR, err
-	}
-
-	// Workaround: 'instances' can be null, making DeepEqual() return false when comparing against an empty map instance.
-	// So, compare as long there is data.
-	if (len(instances) > 0 || len(instance.GetOneAgentStatus().Instances) > 0) && !reflect.DeepEqual(instances, instance.GetOneAgentStatus().Instances) {
-		logger.Info("oneagent pod instances changed", "status", instance.GetOneAgentStatus())
-		updateCR = true
-		instance.GetOneAgentStatus().Instances = instances
-	}
-
-	var waitSecs uint16 = 300
-	if instance.GetOneAgentSpec().WaitReadySeconds != nil {
-		waitSecs = *instance.GetOneAgentSpec().WaitReadySeconds
-	}
-
-	if len(podsToDelete) > 0 {
-		if instance.GetOneAgentStatus().SetPhase(dynatracev1alpha1.Deploying) {
-			err := UpdateCR(instance, r.client)
-			if err != nil {
-				logger.Error(err, fmt.Sprintf("failed to set phase to %s", dynatracev1alpha1.Deploying))
-			}
-		}
-	}
-
-	// restart daemonset
-	err = DeletePods(logger, podsToDelete, BuildLabels(instance.GetName()), waitSecs, r.client)
-	if err != nil {
-		logger.Error(err, "failed to update version")
-		return updateCR, err
-	}
+	//
+	//// get desired version
+	//desired, err := dtc.GetLatestAgentVersion(dtclient.OsUnix, dtclient.InstallerTypeDefault)
+	//if err != nil {
+	//	return false, fmt.Errorf("failed to get desired version: %w", err)
+	//} else if desired != "" && instance.GetOneAgentStatus().Version != desired {
+	//	logger.Info("new version available", "actual", instance.GetOneAgentStatus().Version, "desired", desired)
+	//	instance.GetOneAgentStatus().Version = desired
+	//	updateCR = true
+	//}
+	//
+	//// query oneagent pods
+	//podList := &corev1.PodList{}
+	//listOps := []client.ListOption{
+	//	client.InNamespace(instance.GetNamespace()),
+	//	client.MatchingLabels(oneagent.BuildLabels(instance.GetName())),
+	//}
+	//err = r.client.List(context.TODO(), podList, listOps...)
+	//if err != nil {
+	//	logger.Error(err, "failed to list pods", "listops", listOps)
+	//	return updateCR, err
+	//}
+	//
+	//// determine pods to restart
+	//podsToDelete, instances, err := oneagent.getPodsToRestart(podList.Items, dtc, instance)
+	//if err != nil {
+	//	return updateCR, err
+	//}
+	//
+	//// Workaround: 'instances' can be null, making DeepEqual() return false when comparing against an empty map instance.
+	//// So, compare as long there is data.
+	//if (len(instances) > 0 || len(instance.GetOneAgentStatus().Instances) > 0) && !reflect.DeepEqual(instances, instance.GetOneAgentStatus().Instances) {
+	//	logger.Info("oneagent pod instances changed", "status", instance.GetOneAgentStatus())
+	//	updateCR = true
+	//	instance.GetOneAgentStatus().Instances = instances
+	//}
+	//
+	//var waitSecs uint16 = 300
+	//if instance.GetOneAgentSpec().WaitReadySeconds != nil {
+	//	waitSecs = *instance.GetOneAgentSpec().WaitReadySeconds
+	//}
+	//
+	//if len(podsToDelete) > 0 {
+	//	if instance.GetOneAgentStatus().SetPhase(dynatracev1alpha1.Deploying) {
+	//		err := oneagent.UpdateCR(instance, r.client)
+	//		if err != nil {
+	//			logger.Error(err, fmt.Sprintf("failed to set phase to %s", dynatracev1alpha1.Deploying))
+	//		}
+	//	}
+	//}
+	//
+	//// restart daemonset
+	//err = oneagent.DeletePods(logger, podsToDelete, oneagent.BuildLabels(instance.GetName()), waitSecs, r.client)
+	//if err != nil {
+	//	logger.Error(err, "failed to update version")
+	//	return updateCR, err
+	//}
 
 	return updateCR, nil
 }

@@ -1,0 +1,7 @@
+apiVersion: dynatrace.com/v1alpha2
+kind: OneAgent
+metadata:
+  name: example-oneagent
+spec:
+  # Add fields here
+  size: 3
