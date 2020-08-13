@@ -35,8 +35,7 @@ type ReconcileNodes struct {
 	scheme       *runtime.Scheme
 	logger       logr.Logger
 	dtClientFunc utils.DynatraceClientFunc
-	local        bool
-}
+	local        bool}
 
 // Add creates a new Nodes Controller and adds it to the Manager. The Manager will set fields on the Controller
 // and Start it when the Manager is Started.

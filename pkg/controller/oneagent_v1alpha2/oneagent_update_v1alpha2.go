@@ -2,7 +2,6 @@ package oneagent_v1alpha2
 
 import (
 	"context"
-	"github.com/Dynatrace/dynatrace-activegate-operator/pkg/controller/builder"
 	dynatracev1alpha2 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha2"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagent"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/parser"
@@ -103,7 +102,7 @@ func (r *ReconcileOneAgent) findPods(instance *dynatracev1alpha2.OneAgent) ([]co
 	podList := &corev1.PodList{}
 	listOptions := []client.ListOption{
 		client.InNamespace(instance.GetNamespace()),
-		client.MatchingLabels(builder.BuildLabelsForQuery(instance.Name)),
+		client.MatchingLabels(oneagent.BuildLabels(instance.Name)),
 	}
 	err := r.client.List(context.TODO(), podList, listOptions...)
 	if err != nil {
