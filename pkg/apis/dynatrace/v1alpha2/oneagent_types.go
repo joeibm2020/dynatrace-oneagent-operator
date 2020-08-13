@@ -25,6 +25,14 @@ import (
 // +k8s:openapi-gen=true
 type OneAgentSpec struct {
 	dynatracev1alpha1.OneAgentSpec `json:",inline"`
+
+	// Optional: If specified, indicates the OneAgent version to use
+	// Defaults to latest
+	// Example: {major.minor.release} - 1.200.0
+	// +operator-sdk:gen-csv:customresourcedefinitions.specDescriptors=true
+	// +operator-sdk:gen-csv:customresourcedefinitions.specDescriptors.displayName="OneAgent version"
+	// +operator-sdk:gen-csv:customresourcedefinitions.specDescriptors.x-descriptors="urn:alm:descriptor:com.tectonic.ui:text"
+	AgentVersion string `json:"agentVersion,omitempty"`
 }
 
 // OneAgentStatus defines the observed state of OneAgent

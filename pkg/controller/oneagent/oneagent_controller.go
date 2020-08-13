@@ -235,7 +235,7 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 	updateCR := false
 
 	// Define a new DaemonSet object
-	dsDesired, err := NewDaemonSetForCR(instance)
+	dsDesired, err := NewDaemonSetForCR(instance, logger)
 	if err != nil {
 		return false, err
 	}

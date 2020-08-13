@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	dynatracev1alpha1 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha1"
+	dynatracev1alpha2 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha2"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/utils"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/version"
 	"github.com/go-logr/logr"
@@ -53,8 +54,8 @@ func DetermineOneAgentPhase(instance dynatracev1alpha1.BaseOneAgentDaemonSet, c 
 	return phaseChanged, nil
 }
 
-func NewDaemonSetForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet) (*appsv1.DaemonSet, error) {
-	podSpec := newPodSpecForCR(instance)
+func NewDaemonSetForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger logr.Logger) (*appsv1.DaemonSet, error) {
+	podSpec := newPodSpecForCR(instance, logger)
 	selectorLabels := BuildLabels(instance.GetName())
 	mergedLabels := mergeLabels(instance.GetOneAgentSpec().Labels, selectorLabels)
 
@@ -83,16 +84,10 @@ func NewDaemonSetForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet) (*appsv
 	return ds, nil
 }
 
-func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet) corev1.PodSpec {
+func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger logr.Logger) corev1.PodSpec {
+	p := corev1.PodSpec{}
 	trueVar := true
-
-	envVarImg := os.Getenv("RELATED_IMAGE_DYNATRACE_ONEAGENT")
 	img := "docker.io/dynatrace/oneagent:latest"
-	if instance.GetOneAgentSpec().Image != "" {
-		img = instance.GetOneAgentSpec().Image
-	} else if envVarImg != "" {
-		img = envVarImg
-	}
 
 	sa := "dynatrace-oneagent"
 	if instance.GetOneAgentSpec().ServiceAccountName != "" {
@@ -117,10 +112,10 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet) corev1.Po
 	// K8s 1.18+ is expected to drop the "beta.kubernetes.io" labels in favor of "kubernetes.io" which was added on K8s 1.14.
 	// To support both older and newer K8s versions we use node affinity.
 
-	return corev1.PodSpec{
+	p = corev1.PodSpec{
 		Containers: []corev1.Container{{
 			Args:            args,
-			Env:             prepareEnvVars(instance),
+			Env:             nil,
 			Image:           img,
 			ImagePullPolicy: corev1.PullAlways,
 			Name:            "dynatrace-oneagent",
@@ -188,6 +183,52 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet) corev1.Po
 		},
 		Volumes: prepareVolumes(instance),
 	}
+
+	if instance.GetObjectKind().GroupVersionKind().Version == dynatracev1alpha1.SchemeGroupVersion.Version {
+		ps, err := preparePodSpecV1(p, instance)
+		if err != nil {
+			logger.Error(err, "failed to prepare pod spec v1")
+		}
+		p = ps
+	} else if instance.GetObjectKind().GroupVersionKind().Version == dynatracev1alpha2.SchemeGroupVersion.Version {
+		ps, err := preparePodSpecV2(p, instance)
+		if err != nil {
+			logger.Error(err, "failed to prepare pod spec v2")
+		}
+		p = ps
+	}
+
+	return p
+}
+
+func preparePodSpecV1(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) (corev1.PodSpec, error) {
+	var img string
+	envVarImg := os.Getenv("RELATED_IMAGE_DYNATRACE_ONEAGENT")
+
+	if instance.GetOneAgentSpec().Image != "" {
+		img = instance.GetOneAgentSpec().Image
+	} else if envVarImg != "" {
+		img = envVarImg
+	}
+
+	p.Containers[0].Image = img
+	p.Containers[0].Env = prepareEnvVars(instance)
+	return p, nil
+}
+
+func preparePodSpecV2(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) (corev1.PodSpec, error) {
+	p.ImagePullSecrets = append(p.ImagePullSecrets, corev1.LocalObjectReference{
+		Name: instance.GetName() + "-pull-secret",
+	},
+	)
+
+	i, err := utils.BuildOneAgentImage(instance.GetSpec().APIURL, instance.(*dynatracev1alpha2.OneAgent).Spec.AgentVersion)
+	if err != nil {
+		return corev1.PodSpec{}, err
+	}
+	p.Containers[0].Image = i
+
+	return p, nil
 }
 
 func prepareVolumes(instance dynatracev1alpha1.BaseOneAgentDaemonSet) []corev1.Volume {

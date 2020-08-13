@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagent"
+	corev1 "k8s.io/api/core/v1"
 	"net/http"
 	"time"
 
@@ -132,7 +133,7 @@ func (r *ReconcileOneAgent) Reconcile(request reconcile.Request) (reconcile.Resu
 	logger := r.logger.WithValues("namespace", request.Namespace, "name", request.Name)
 	logger.Info("Reconciling OneAgent")
 
-	instance := r.instance.DeepCopyObject().(dynatracev1alpha1.BaseOneAgentDaemonSet)
+	instance := r.instance.DeepCopyObject().(*dynatracev1alpha2.OneAgent)
 
 	// Using the apiReader, which does not use caching to prevent a possible race condition where an old version of
 	// the OneAgent object is returned from the cache, but it has already been modified on the cluster side
@@ -175,7 +176,7 @@ func (r *ReconcileOneAgent) Reconcile(request reconcile.Request) (reconcile.Resu
 
 type reconciliation struct {
 	log      logr.Logger
-	instance dynatracev1alpha1.BaseOneAgentDaemonSet
+	instance *dynatracev1alpha2.OneAgent
 
 	// If update is true, then changes on instance will be sent to the Kubernetes API.
 	//
@@ -210,7 +211,12 @@ func (r *ReconcileOneAgent) reconcileImpl(rec *reconciliation) {
 		}
 	}
 
-	upd, err = r.reconcileRollout(rec.log, rec.instance, dtc)
+	err = r.ReconcilePullSecret(rec.instance, rec.log)
+	if rec.Error(err) {
+		return
+	}
+
+	upd, err = r.reconcileRollout(rec.log, *rec.instance)
 	if rec.Error(err) || rec.Update(upd, 5*time.Minute, "Rollout reconciled") {
 		return
 	}
@@ -220,7 +226,7 @@ func (r *ReconcileOneAgent) reconcileImpl(rec *reconciliation) {
 		return
 	}
 
-	upd, err = r.reconcileVersion(rec.log, rec.instance, dtc)
+	upd, err = r.updatePods(rec.instance)
 	if rec.Error(err) || rec.Update(upd, 5*time.Minute, "Versions reconciled") {
 		return
 	}
@@ -231,17 +237,17 @@ func (r *ReconcileOneAgent) reconcileImpl(rec *reconciliation) {
 	}
 }
 
-func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatracev1alpha1.BaseOneAgentDaemonSet, dtc dtclient.Client) (bool, error) {
+func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatracev1alpha2.OneAgent) (bool, error) {
 	updateCR := false
 
 	// Define a new DaemonSet object
-	dsDesired, err := oneagent.NewDaemonSetForCR(instance)
+	dsDesired, err := oneagent.NewDaemonSetForCR(&instance, logger)
 	if err != nil {
 		return false, err
 	}
 
 	// Set OneAgent instance as the owner and controller
-	if err := controllerutil.SetControllerReference(instance, dsDesired, r.scheme); err != nil {
+	if err := controllerutil.SetControllerReference(&instance, dsDesired, r.scheme); err != nil {
 		return false, err
 	}
 
@@ -263,13 +269,14 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 	}
 
 	if instance.GetOneAgentStatus().Version == "" {
-		desired, err := dtc.GetLatestAgentVersion(dtclient.OsUnix, dtclient.InstallerTypeDefault)
-		if err != nil {
-			return updateCR, fmt.Errorf("failed to get desired version: %w", err)
+		logger.Info("Updating version on OneAgent instance")
+
+		if instance.Spec.AgentVersion == "" {
+			instance.GetOneAgentStatus().Version = "latest"
+		} else {
+			instance.GetOneAgentStatus().Version = instance.Spec.AgentVersion
 		}
 
-		logger.Info("Updating version on OneAgent instance")
-		instance.GetOneAgentStatus().Version = desired
 		instance.GetOneAgentStatus().SetPhase(dynatracev1alpha1.Deploying)
 		updateCR = true
 	}
@@ -277,65 +284,19 @@ func (r *ReconcileOneAgent) reconcileRollout(logger logr.Logger, instance dynatr
 	return updateCR, nil
 }
 
-func (r *ReconcileOneAgent) reconcileVersion(logger logr.Logger, instance dynatracev1alpha1.BaseOneAgentDaemonSet, dtc dtclient.Client) (bool, error) {
-	updateCR := false
-	//
-	//// get desired version
-	//desired, err := dtc.GetLatestAgentVersion(dtclient.OsUnix, dtclient.InstallerTypeDefault)
-	//if err != nil {
-	//	return false, fmt.Errorf("failed to get desired version: %w", err)
-	//} else if desired != "" && instance.GetOneAgentStatus().Version != desired {
-	//	logger.Info("new version available", "actual", instance.GetOneAgentStatus().Version, "desired", desired)
-	//	instance.GetOneAgentStatus().Version = desired
-	//	updateCR = true
-	//}
-	//
-	//// query oneagent pods
-	//podList := &corev1.PodList{}
-	//listOps := []client.ListOption{
-	//	client.InNamespace(instance.GetNamespace()),
-	//	client.MatchingLabels(oneagent.BuildLabels(instance.GetName())),
-	//}
-	//err = r.client.List(context.TODO(), podList, listOps...)
-	//if err != nil {
-	//	logger.Error(err, "failed to list pods", "listops", listOps)
-	//	return updateCR, err
-	//}
-	//
-	//// determine pods to restart
-	//podsToDelete, instances, err := oneagent.getPodsToRestart(podList.Items, dtc, instance)
-	//if err != nil {
-	//	return updateCR, err
-	//}
-	//
-	//// Workaround: 'instances' can be null, making DeepEqual() return false when comparing against an empty map instance.
-	//// So, compare as long there is data.
-	//if (len(instances) > 0 || len(instance.GetOneAgentStatus().Instances) > 0) && !reflect.DeepEqual(instances, instance.GetOneAgentStatus().Instances) {
-	//	logger.Info("oneagent pod instances changed", "status", instance.GetOneAgentStatus())
-	//	updateCR = true
-	//	instance.GetOneAgentStatus().Instances = instances
-	//}
-	//
-	//var waitSecs uint16 = 300
-	//if instance.GetOneAgentSpec().WaitReadySeconds != nil {
-	//	waitSecs = *instance.GetOneAgentSpec().WaitReadySeconds
-	//}
-	//
-	//if len(podsToDelete) > 0 {
-	//	if instance.GetOneAgentStatus().SetPhase(dynatracev1alpha1.Deploying) {
-	//		err := oneagent.UpdateCR(instance, r.client)
-	//		if err != nil {
-	//			logger.Error(err, fmt.Sprintf("failed to set phase to %s", dynatracev1alpha1.Deploying))
-	//		}
-	//	}
-	//}
-	//
-	//// restart daemonset
-	//err = oneagent.DeletePods(logger, podsToDelete, oneagent.BuildLabels(instance.GetName()), waitSecs, r.client)
-	//if err != nil {
-	//	logger.Error(err, "failed to update version")
-	//	return updateCR, err
-	//}
+func (r *ReconcileOneAgent) ReconcilePullSecret(instance *dynatracev1alpha2.OneAgent, log logr.Logger) error {
+	var tkns corev1.Secret
+	if err := r.client.Get(context.TODO(), client.ObjectKey{Name: utils.GetTokensName(instance), Namespace: instance.Namespace}, &tkns); err != nil {
+		return fmt.Errorf("failed to query tokens: %w", err)
+	}
+	pullSecretData, err := utils.GeneratePullSecretData(r.client, instance, &tkns)
+	if err != nil {
+		return fmt.Errorf("failed to generate pull secret data: %w", err)
+	}
+	err = utils.CreateOrUpdateSecretIfNotExists(r.client, r.client, instance.Name+"-pull-secret", instance.Namespace, pullSecretData, corev1.SecretTypeDockerConfigJson, log)
+	if err != nil {
+		return fmt.Errorf("failed to create or update secret: %w", err)
+	}
 
-	return updateCR, nil
+	return nil
 }
