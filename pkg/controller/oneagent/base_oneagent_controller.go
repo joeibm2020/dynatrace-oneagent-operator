@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"os"
@@ -87,11 +88,19 @@ func NewDaemonSetForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger 
 func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger logr.Logger) corev1.PodSpec {
 	p := corev1.PodSpec{}
 	trueVar := true
-	img := "docker.io/dynatrace/oneagent:latest"
 
 	sa := "dynatrace-oneagent"
 	if instance.GetOneAgentSpec().ServiceAccountName != "" {
 		sa = instance.GetOneAgentSpec().ServiceAccountName
+	}
+
+	resources := instance.GetOneAgentSpec().Resources
+	if resources.Requests == nil {
+		resources.Requests = corev1.ResourceList{}
+	}
+	if _, hasCPUResource := resources.Requests[corev1.ResourceCPU]; !hasCPUResource {
+		// Set CPU resource to 1 * 10**(-1) Cores, e.g. 100mC
+		resources.Requests[corev1.ResourceCPU] = *resource.NewScaledQuantity(1, -1)
 	}
 
 	args := instance.GetOneAgentSpec().Args
@@ -116,7 +125,7 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger lo
 		Containers: []corev1.Container{{
 			Args:            args,
 			Env:             nil,
-			Image:           img,
+			Image:           "",
 			ImagePullPolicy: corev1.PullAlways,
 			Name:            "dynatrace-oneagent",
 			ReadinessProbe: &corev1.Probe{
@@ -131,7 +140,7 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger lo
 				PeriodSeconds:       30,
 				TimeoutSeconds:      1,
 			},
-			Resources: instance.GetOneAgentSpec().Resources,
+			Resources: resources,
 			SecurityContext: &corev1.SecurityContext{
 				Privileged: &trueVar,
 			},
@@ -184,25 +193,23 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger lo
 		Volumes: prepareVolumes(instance),
 	}
 
-	if instance.GetObjectKind().GroupVersionKind().Version == dynatracev1alpha1.SchemeGroupVersion.Version {
-		ps, err := preparePodSpecV1(p, instance)
+	if _, ok := instance.(*dynatracev1alpha1.OneAgent); ok {
+		err := preparePodSpecV1(&p, instance)
 		if err != nil {
 			logger.Error(err, "failed to prepare pod spec v1")
 		}
-		p = ps
-	} else if instance.GetObjectKind().GroupVersionKind().Version == dynatracev1alpha2.SchemeGroupVersion.Version {
-		ps, err := preparePodSpecV2(p, instance)
+	} else if _, ok := instance.(*dynatracev1alpha2.OneAgent); ok {
+		err := preparePodSpecV2(&p, instance)
 		if err != nil {
 			logger.Error(err, "failed to prepare pod spec v2")
 		}
-		p = ps
 	}
 
 	return p
 }
 
-func preparePodSpecV1(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) (corev1.PodSpec, error) {
-	var img string
+func preparePodSpecV1(p *corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) error {
+	img := "docker.io/dynatrace/oneagent:latest"
 	envVarImg := os.Getenv("RELATED_IMAGE_DYNATRACE_ONEAGENT")
 
 	if instance.GetOneAgentSpec().Image != "" {
@@ -213,10 +220,10 @@ func preparePodSpecV1(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentD
 
 	p.Containers[0].Image = img
 	p.Containers[0].Env = prepareEnvVars(instance)
-	return p, nil
+	return nil
 }
 
-func preparePodSpecV2(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) (corev1.PodSpec, error) {
+func preparePodSpecV2(p *corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentDaemonSet) error {
 	p.ImagePullSecrets = append(p.ImagePullSecrets, corev1.LocalObjectReference{
 		Name: instance.GetName() + "-pull-secret",
 	},
@@ -224,11 +231,11 @@ func preparePodSpecV2(p corev1.PodSpec, instance dynatracev1alpha1.BaseOneAgentD
 
 	i, err := utils.BuildOneAgentImage(instance.GetSpec().APIURL, instance.(*dynatracev1alpha2.OneAgent).Spec.AgentVersion)
 	if err != nil {
-		return corev1.PodSpec{}, err
+		return err
 	}
 	p.Containers[0].Image = i
 
-	return p, nil
+	return nil
 }
 
 func prepareVolumes(instance dynatracev1alpha1.BaseOneAgentDaemonSet) []corev1.Volume {
