@@ -45,8 +45,16 @@ type OneAgentStatus struct {
 
 // OneAgent is the Schema for the oneagents API
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:path=oneagents,scope=Namespaced
+// +kubebuilder:resource:path=oneagents,scope=Namespaced,categories=dynatrace
 // +kubebuilder:storageversion
+// +kubebuilder:printcolumn:name="ApiUrl",type=string,JSONPath=`.spec.apiUrl`
+// +kubebuilder:printcolumn:name="Tokens",type=string,JSONPath=`.spec.tokens`
+// +kubebuilder:printcolumn:name="Version",type=string,JSONPath=`.status.version`
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +operator-sdk:gen-csv:customresourcedefinitions.displayName="Dynatrace OneAgent"
+// +operator-sdk:gen-csv:customresourcedefinitions.resources=`DaemonSet,v1beta2,""`
+// +operator-sdk:gen-csv:customresourcedefinitions.resources=`Pod,v1,""`
 type OneAgent struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -21,6 +21,7 @@ import (
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/namespace"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/nodes"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagent"
+	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagent_v1alpha2"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/oneagentapm"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"k8s.io/client-go/rest"
@@ -41,6 +42,7 @@ func startOperator(ns string, cfg *rest.Config) (manager.Manager, error) {
 
 	for _, f := range []func(manager.Manager) error{
 		oneagent.Add,
+		oneagent_v1alpha2.Add,
 		oneagentapm.Add,
 		namespace.Add,
 		nodes.Add,

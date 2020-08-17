@@ -193,15 +193,15 @@ func newPodSpecForCR(instance dynatracev1alpha1.BaseOneAgentDaemonSet, logger lo
 		Volumes: prepareVolumes(instance),
 	}
 
-	if _, ok := instance.(*dynatracev1alpha1.OneAgent); ok {
-		err := preparePodSpecV1(&p, instance)
-		if err != nil {
-			logger.Error(err, "failed to prepare pod spec v1")
-		}
-	} else if _, ok := instance.(*dynatracev1alpha2.OneAgent); ok {
+	if _, ok := instance.(*dynatracev1alpha2.OneAgent); ok {
 		err := preparePodSpecV2(&p, instance)
 		if err != nil {
 			logger.Error(err, "failed to prepare pod spec v2")
+		}
+	} else if _, ok := instance.(*dynatracev1alpha1.OneAgent); ok {
+		err := preparePodSpecV1(&p, instance)
+		if err != nil {
+			logger.Error(err, "failed to prepare pod spec v1")
 		}
 	}
 
