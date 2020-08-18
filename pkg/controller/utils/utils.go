@@ -20,15 +20,12 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
 	DynatracePaasToken = "paasToken"
 	DynatraceApiToken  = "apiToken"
 )
-
-var logger = log.Log.WithName("dynatrace.utils")
 
 // DynatraceClientFunc defines handler func for dynatrace client
 type DynatraceClientFunc func(rtc client.Client, instance dynatracev1alpha1.BaseOneAgent) (dtclient.Client, error)
@@ -203,7 +200,7 @@ func CreateOrUpdateSecretIfNotExists(c client.Client, r client.Reader, secretNam
 }
 
 // GeneratePullSecretData generates the secret data for the PullSecret
-func GeneratePullSecretData(c client.Client, apm *dynatracev1alpha1.OneAgentAPM, tkns *corev1.Secret) (map[string][]byte, error) {
+func GeneratePullSecretData(c client.Client, oa dynatracev1alpha1.BaseOneAgent, tkns *corev1.Secret) (map[string][]byte, error) {
 	type auths struct {
 		Username string
 		Password string
@@ -214,7 +211,7 @@ func GeneratePullSecretData(c client.Client, apm *dynatracev1alpha1.OneAgentAPM,
 		Auths map[string]auths
 	}
 
-	dtc, err := BuildDynatraceClient(c, apm)
+	dtc, err := BuildDynatraceClient(c, oa)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +221,7 @@ func GeneratePullSecretData(c client.Client, apm *dynatracev1alpha1.OneAgentAPM,
 		return nil, err
 	}
 
-	r, err := GetImageRegistryFromAPIURL(apm.Spec.APIURL)
+	r, err := GetImageRegistryFromAPIURL(oa.GetSpec().APIURL)
 	if err != nil {
 		return nil, err
 	}
@@ -277,6 +274,21 @@ func BuildOneAgentAPMImage(apiURL string, flavor string, technologies string, ag
 
 	if len(tags) > 0 {
 		image = fmt.Sprintf("%s:%s", image, strings.Join(tags, "-"))
+	}
+
+	return image, nil
+}
+
+func BuildOneAgentImage(apiURL string, agentVersion string) (string, error) {
+	registry, err := GetImageRegistryFromAPIURL(apiURL)
+	if err != nil {
+		return "", err
+	}
+
+	image := registry + "/linux/oneagent"
+
+	if agentVersion != "" {
+		image += ":" + agentVersion
 	}
 
 	return image, nil

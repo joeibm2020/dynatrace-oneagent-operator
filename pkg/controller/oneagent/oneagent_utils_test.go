@@ -2,10 +2,11 @@ package oneagent
 
 import (
 	"errors"
+	"os"
+	logf "sigs.k8s.io/controller-runtime/pkg/runtime/log"
 	"testing"
 
 	dynatracev1alpha1 "github.com/Dynatrace/dynatrace-oneagent-operator/pkg/apis/dynatrace/v1alpha1"
-	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/controller/utils"
 	"github.com/Dynatrace/dynatrace-oneagent-operator/pkg/dtclient"
 	"github.com/stretchr/testify/assert"
 	appsv1 "k8s.io/api/apps/v1"
@@ -48,11 +49,12 @@ func TestOneAgent_Validate(t *testing.T) {
 }
 
 func TestMigrationForDaemonSetWithoutAnnotation(t *testing.T) {
+	logger := logf.ZapLoggerTo(os.Stdout, true)
 	oaKey := metav1.ObjectMeta{Name: "my-oneagent", Namespace: "my-namespace"}
 
 	ds1 := &appsv1.DaemonSet{ObjectMeta: oaKey}
 
-	ds2, err := newDaemonSetForCR(&dynatracev1alpha1.OneAgent{ObjectMeta: oaKey})
+	ds2, err := newDaemonSetForCR(logger, &dynatracev1alpha1.OneAgent{ObjectMeta: oaKey})
 	assert.NoError(t, err)
 	assert.NotEmpty(t, ds2.Annotations[annotationTemplateHash])
 
@@ -60,6 +62,7 @@ func TestMigrationForDaemonSetWithoutAnnotation(t *testing.T) {
 }
 
 func TestHasSpecChanged(t *testing.T) {
+	logger := logf.ZapLoggerTo(os.Stdout, true)
 	runTest := func(msg string, exp bool, mod func(old *dynatracev1alpha1.OneAgent, new *dynatracev1alpha1.OneAgent)) {
 		t.Run(msg, func(t *testing.T) {
 			key := metav1.ObjectMeta{Name: "my-oneagent", Namespace: "my-namespace"}
@@ -68,10 +71,10 @@ func TestHasSpecChanged(t *testing.T) {
 
 			mod(&old, &new)
 
-			ds1, err := newDaemonSetForCR(&old)
+			ds1, err := newDaemonSetForCR(logger, &old)
 			assert.NoError(t, err)
 
-			ds2, err := newDaemonSetForCR(&new)
+			ds2, err := newDaemonSetForCR(logger, &new)
 			assert.NoError(t, err)
 
 			assert.NotEmpty(t, ds1.Annotations[annotationTemplateHash])
@@ -176,7 +179,7 @@ func TestGetPodsToRestart(t *testing.T) {
 	oa := newOneAgent()
 	oa.Status.Version = "1.2.3"
 	oa.Status.Instances = map[string]dynatracev1alpha1.OneAgentInstance{"node-3": {Version: "outdated"}}
-	doomed, instances, err := getPodsToRestart(pods, dtc, oa)
+	doomed, instances, err := findOutdatedPodsInstaller(pods, dtc, oa)
 	assert.Lenf(t, doomed, 1, "list of pods to restart")
 	assert.Equalf(t, doomed[0], pods[1], "list of pods to restart")
 	assert.Lenf(t, instances, 3, "list of instances")
@@ -198,69 +201,6 @@ func newOneAgent() *dynatracev1alpha1.OneAgent {
 	}
 }
 
-func newOneAgentSpec() *dynatracev1alpha1.OneAgentSpec {
-	return &dynatracev1alpha1.OneAgentSpec{}
-}
-
-func newDaemonSetSpec() *appsv1.DaemonSetSpec {
-	return &appsv1.DaemonSetSpec{
-		Template: corev1.PodTemplateSpec{
-			ObjectMeta: metav1.ObjectMeta{
-				Labels: map[string]string{
-					"dynatrace": "oneagent",
-					"oneagent":  "my-oneagent",
-				},
-			},
-			Spec: corev1.PodSpec{
-				ServiceAccountName: "dynatrace-oneagent",
-				Containers: []corev1.Container{
-					{
-						Image: "docker.io/dynatrace/oneagent:latest",
-						Args: []string{
-							"--set-host-property=OperatorVersion=snapshot",
-						},
-						Env: []corev1.EnvVar{
-							{
-								Name: "ONEAGENT_INSTALLER_TOKEN",
-								ValueFrom: &corev1.EnvVarSource{
-									SecretKeyRef: &corev1.SecretKeySelector{
-										LocalObjectReference: corev1.LocalObjectReference{Name: "my-oneagent"},
-										Key:                  utils.DynatracePaasToken,
-									},
-								},
-							},
-							{
-								Name:  "ONEAGENT_INSTALLER_SCRIPT_URL",
-								Value: "/v1/deployment/installer/agent/unix/default/latest?Api-Token=$(ONEAGENT_INSTALLER_TOKEN)&arch=x86&flavor=default",
-							},
-							{
-								Name:  "ONEAGENT_INSTALLER_SKIP_CERT_CHECK",
-								Value: "false",
-							},
-						},
-						VolumeMounts: []corev1.VolumeMount{
-							{
-								Name:      "host-root",
-								MountPath: "/mnt/root",
-							},
-						},
-					},
-				},
-				Volumes: []corev1.Volume{
-					{
-						Name: "host-root",
-						VolumeSource: corev1.VolumeSource{
-							HostPath: &corev1.HostPathVolumeSource{
-								Path: "/",
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-}
-
 func newResourceRequirements() corev1.ResourceRequirements {
 	return corev1.ResourceRequirements{
 		Limits: corev1.ResourceList{
@@ -272,13 +212,6 @@ func newResourceRequirements() corev1.ResourceRequirements {
 			"memory": parseQuantity("200Mi"),
 		},
 	}
-}
-
-func newEnvVar() []corev1.EnvVar {
-	return []corev1.EnvVar{{
-		Name:  "ONEAGENT_ENABLE_VOLUME_STORAGE",
-		Value: "true",
-	}}
 }
 
 func parseQuantity(s string) resource.Quantity {
